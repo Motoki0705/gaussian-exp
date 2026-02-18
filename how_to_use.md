@@ -2,7 +2,7 @@
 
 このワークスペースでは、公式 3D Gaussian Splatting をクローンして、依存ビルドまで完了しています。
 
-- クローン先: `gaussian-splatting/`
+- クローン先: `gaussian-exp/`
 - サブモジュール: 初期化済み
 - Python 仮想環境: `.venv/`
 - CUDA 拡張 (`simple-knn`, `fused-ssim`, `diff-gaussian-rasterization`): インストール済み
@@ -16,7 +16,7 @@
 #### 仮想環境を作る（初回のみ）
 
 ```bash
-cd /root/repos/3dgs-exp
+cd /root/repos/gaussian-exp
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip setuptools wheel
@@ -25,16 +25,16 @@ python -m pip install --upgrade pip setuptools wheel
 #### 依存を入れる（今回の実行構成）
 
 ```bash
-cd /root/repos/3dgs-exp/gaussian-splatting
+cd /root/repos/gaussian-exp
 
 # PyTorch (CUDA 12.8)
-/root/repos/3dgs-exp/.venv/bin/python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+/root/repos/gaussian-exp/.venv/bin/python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 
 # Python依存
-/root/repos/3dgs-exp/.venv/bin/python -m pip install plyfile tqdm opencv-python joblib
+/root/repos/gaussian-exp/.venv/bin/python -m pip install plyfile tqdm opencv-python joblib
 
 # CUDA拡張（3DGS必須）
-/root/repos/3dgs-exp/.venv/bin/python -m pip install --no-build-isolation \
+/root/repos/gaussian-exp/.venv/bin/python -m pip install --no-build-isolation \
 	./submodules/simple-knn \
 	./submodules/fused-ssim \
 	./submodules/diff-gaussian-rasterization
@@ -43,32 +43,32 @@ cd /root/repos/3dgs-exp/gaussian-splatting
 #### ふだん有効化するとき
 
 ```bash
-source /root/repos/3dgs-exp/.venv/bin/activate
+source /root/repos/gaussian-exp/.venv/bin/activate
 ```
 
 #### 動作確認（実施済み）
 
 ```bash
-/root/repos/3dgs-exp/.venv/bin/python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+/root/repos/gaussian-exp/.venv/bin/python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
 ```
 
 期待値: `2.10.0+cu128 True`
 
 ### 2) 学習実行
 
-以下は `gaussian-splatting/data/sample.mp4` で実際に実行・検証した手順です。
+以下は `data/sample.mp4` で実際に実行・検証した手順です。
 
 #### 実際に実行した前処理（動画 → 3DGSデータ）
 
 ```bash
-cd /root/repos/3dgs-exp/gaussian-splatting
+cd /root/repos/gaussian-exp
 
 # 1) フレーム抽出（3fps、長辺縮小）
 mkdir -p data/sample_scene/input
 ffmpeg -y -i data/sample.mp4 -vf "fps=3,scale=1280:-1" -q:v 2 data/sample_scene/input/frame_%04d.jpg
 
 # 2) COLMAPで再構成 + 3DGS向け形式へ変換
-/root/repos/3dgs-exp/.venv/bin/python convert.py -s /root/repos/3dgs-exp/gaussian-splatting/data/sample_scene
+/root/repos/gaussian-exp/.venv/bin/python convert.py -s /root/repos/gaussian-exp/data/sample_scene
 ```
 
 #### 前処理コマンドで得られる出力構造
@@ -76,7 +76,7 @@ ffmpeg -y -i data/sample.mp4 -vf "fps=3,scale=1280:-1" -q:v 2 data/sample_scene/
 `ffmpeg` 後:
 
 ```text
-gaussian-splatting/data/sample_scene/
+data/sample_scene/
 	input/
 		frame_0001.jpg
 		frame_0002.jpg
@@ -86,7 +86,7 @@ gaussian-splatting/data/sample_scene/
 `convert.py` 後:
 
 ```text
-gaussian-splatting/data/sample_scene/
+data/sample_scene/
 	input/                  # 元フレーム
 	images/                 # undistort済み画像（train.pyが読む）
 	sparse/0/
@@ -102,12 +102,12 @@ gaussian-splatting/data/sample_scene/
 #### 実際に実行した学習
 
 ```bash
-cd /root/repos/3dgs-exp/gaussian-splatting
+cd /root/repos/gaussian-exp
 
 # 実測学習（1000 iter）
-/root/repos/3dgs-exp/.venv/bin/python train.py \
-	-s /root/repos/3dgs-exp/gaussian-splatting/data/sample_scene \
-	-m /root/repos/3dgs-exp/gaussian-splatting/output/sample_scene_1k \
+/root/repos/gaussian-exp/.venv/bin/python train.py \
+	-s /root/repos/gaussian-exp/data/sample_scene \
+	-m /root/repos/gaussian-exp/output/sample_scene_1k \
 	--iterations 1000 \
 	--save_iterations 500 1000 \
 	--test_iterations -1
@@ -116,7 +116,7 @@ cd /root/repos/3dgs-exp/gaussian-splatting
 #### 学習コマンドで得られる出力構造
 
 ```text
-gaussian-splatting/output/sample_scene_1k/
+output/sample_scene_1k/
 	cfg_args
 	cameras.json
 	exposure.json
@@ -131,15 +131,15 @@ gaussian-splatting/output/sample_scene_1k/
 #### 実際に実行したレンダリング確認
 
 ```bash
-/root/repos/3dgs-exp/.venv/bin/python render.py \
-	-m /root/repos/3dgs-exp/gaussian-splatting/output/sample_scene_1k \
+/root/repos/gaussian-exp/.venv/bin/python render.py \
+	-m /root/repos/gaussian-exp/output/sample_scene_1k \
 	--iteration 1000
 ```
 
 #### レンダリング時のパス指定（今回の例）
 
 - `-m` には「学習出力ディレクトリ」を指定する
-	- 今回: `/root/repos/3dgs-exp/gaussian-splatting/output/sample_scene_1k`
+	- 今回: `/root/repos/gaussian-exp/output/sample_scene_1k`
 - `--iteration` は任意
 	- `--iteration 1000` を付けると `point_cloud/iteration_1000` を明示的に使用
 	- 省略時は最新反復が自動選択される（今回も実行確認済み）
@@ -147,14 +147,14 @@ gaussian-splatting/output/sample_scene_1k/
 相対パスで書く場合の例:
 
 ```bash
-cd /root/repos/3dgs-exp/gaussian-splatting
+cd /root/repos/gaussian-exp
 python render.py -m output/sample_scene_1k
 ```
 
 #### レンダリングコマンドで得られる出力構造
 
 ```text
-gaussian-splatting/output/sample_scene_1k/
+output/sample_scene_1k/
 	train/
 		ours_1000/
 			renders/            # 生成画像
@@ -212,11 +212,11 @@ gaussian-splatting/output/sample_scene_1k/
 ### 3) 推論/レンダリング
 
 ```bash
-cd /root/repos/3dgs-exp/gaussian-splatting
+cd /root/repos/gaussian-exp
 python render.py -m output/sample_scene_1k
 ```
 
 ## 補足
 
 - 現在の環境では `torch 2.10.0+cu128` と CUDA が有効 (`torch.cuda.is_available() == True`) であることを確認済みです。
-- 公式 README: `gaussian-splatting/README.md`
+- 公式 README: `README.md`
