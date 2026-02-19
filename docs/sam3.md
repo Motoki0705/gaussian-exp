@@ -20,22 +20,38 @@ pip install "torch>=2.5.0" "torchvision>=0.20.0"
 
 ## 3. モデルファイルの準備（固定推奨）
 
-- `/path/to/sam3.pt`（Hugging Face: `facebook/sam3`）
-- `/path/to/config.json`（Hugging Face: `facebook/sam3`）
-- `/path/to/bpe_simple_vocab_16e6.txt.gz`（CLIP BPE）
+以下は、`checkpoints/sam3/` に必要ファイルを固定配置する手順。
 
-注意:
-- 実運用では `checkpoint_path` と `bpe_path` を明示する。
-- 環境差異や自動ダウンロード失敗を避けるため、ローカル固定パス運用を推奨する。
+```bash
+# 1) 保存先を作成
+mkdir -p checkpoints/sam3
 
-## 4. コードでの基本利用フロー（動画）
+# 2) Hugging Face へログイン（未ログイン時）
+hf auth login
 
-SAM3 の動画推論は、以下の 4 ステップで扱う。
+# 3) sam3.pt を取得（facebook/sam3）
+huggingface-cli download facebook/sam3 sam3.pt \
+  --local-dir checkpoints/sam3 \
+  --local-dir-use-symlinks False
 
-1. `build_sam3_video_predictor(...)` で予測器を構築  
-2. `start_session` で対象動画を登録  
-3. `add_prompt` + `propagate_in_video` で時系列推論  
-4. `close_session` で必ず後処理
+# 4) CLIP BPE を取得
+curl -L \
+  -o checkpoints/sam3/bpe_simple_vocab_16e6.txt.gz \
+  https://openaipublic.azureedge.net/clip/bpe_simple_vocab_16e6.txt.gz
+
+# 5) 配置確認
+ls -lh checkpoints/sam3
+```
+
+期待されるファイル:
+- `checkpoints/sam3/sam3.pt`
+- `checkpoints/sam3/bpe_simple_vocab_16e6.txt.gz`
+
+## 4. コードでの基本利用フロー
+
+### 4.1 Build
+
+動画推論器を直接使う場合:
 
 ```python
 from sam3.model_builder import build_sam3_video_predictor
@@ -45,7 +61,31 @@ video_predictor = build_sam3_video_predictor(
     bpe_path="/path/to/bpe_simple_vocab_16e6.txt.gz",
     gpus_to_use=[0],
 )
+```
 
+ポイント推論（画像）を使う場合:
+
+```python
+from sam3.model.sam1_task_predictor import SAM3InteractiveImagePredictor
+from sam3.model_builder import build_sam3_video_model
+
+model = build_sam3_video_model(
+    checkpoint_path="/path/to/sam3.pt",
+    bpe_path="/path/to/bpe_simple_vocab_16e6.txt.gz",
+    load_from_HF=False,
+    device="cuda",
+)
+
+# image predictor は tracker.backbone を参照するため差し替える
+model.tracker.backbone = model.detector.backbone
+point_predictor = SAM3InteractiveImagePredictor(model.tracker)
+```
+
+### 4.2 動画推論
+
+`start_session -> add_prompt -> propagate_in_video -> close_session` の順で使う。
+
+```python
 resp = video_predictor.handle_request(
     {"type": "start_session", "resource_path": "/path/to/video.mp4"}
 )
@@ -70,6 +110,32 @@ try:
         # frame_idx ごとに outputs を保存/後処理
 finally:
     video_predictor.handle_request({"type": "close_session", "session_id": session_id})
+```
+
+### 4.3 Point 推論（画像）
+
+ポイントは `point_coords: [B, N, 2]`、ラベルは `point_labels: [B, N]`。
+単一画像で1プロンプトを投げる場合は `B=1`。
+
+```python
+import numpy as np
+
+image_np = ...  # HxWx3 RGB
+point_predictor.set_image(image_np)
+
+# 例: 2点 (x, y)
+points = np.array([[400.0, 300.0], [420.0, 320.0]], dtype=np.float32)
+labels = np.array([1, 1], dtype=np.int32)  # 1: FG, 0: BG
+
+masks, ious, low_res = point_predictor.predict(
+    point_coords=points[None, :, :],
+    point_labels=labels[None, :],
+    multimask_output=True,
+    normalize_coords=False,
+)
+
+# 戻りの代表 shape:
+# masks: [C, H, W], ious: [C], low_res: [C, 256, 256]
 ```
 
 ## 5. 実装時の設計ポイント
