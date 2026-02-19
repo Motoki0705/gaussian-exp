@@ -99,6 +99,24 @@ class OptimizationParams(ParamGroup):
         self.optimizer_type = "default"
         super().__init__(parser, "Optimization Parameters")
 
+class SemanticParams(ParamGroup):
+    def __init__(self, parser):
+        self.semantic_feature_root = ""
+        self.semantic_levels = "whole,part,subpart"
+        self.semantic_iterations = 30_000
+        self.semantic_lr = 0.001
+        self.ae_lr = 0.001
+        self.latent_dim = 3
+        self.lambda_semantic = 1.0
+        self.lambda_ae = 0.2
+        self.lambda_cosine = 0.1
+        self.warmup_ae_iters = 1000
+        self.semantic_save_interval = 1000
+        self.semantic_test_interval = 1000
+        self.semantic_resume = ""
+        self.no_clamp_semantic = False
+        super().__init__(parser, "Semantic Parameters")
+
 def get_combined_args(parser : ArgumentParser):
     cmdlne_string = sys.argv[1:]
     cfgfile_string = "Namespace()"

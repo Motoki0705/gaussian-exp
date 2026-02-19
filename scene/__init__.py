@@ -85,13 +85,13 @@ class Scene:
     def save(self, iteration):
         point_cloud_path = os.path.join(self.model_path, "point_cloud/iteration_{}".format(iteration))
         self.gaussians.save_ply(os.path.join(point_cloud_path, "point_cloud.ply"))
-        exposure_dict = {
-            image_name: self.gaussians.get_exposure_from_name(image_name).detach().cpu().numpy().tolist()
-            for image_name in self.gaussians.exposure_mapping
-        }
-
-        with open(os.path.join(self.model_path, "exposure.json"), "w") as f:
-            json.dump(exposure_dict, f, indent=2)
+        if hasattr(self.gaussians, "exposure_mapping"):
+            exposure_dict = {
+                image_name: self.gaussians.get_exposure_from_name(image_name).detach().cpu().numpy().tolist()
+                for image_name in self.gaussians.exposure_mapping
+            }
+            with open(os.path.join(self.model_path, "exposure.json"), "w") as f:
+                json.dump(exposure_dict, f, indent=2)
 
     def getTrainCameras(self, scale=1.0):
         return self.train_cameras[scale]
