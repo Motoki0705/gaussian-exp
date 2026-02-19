@@ -412,7 +412,7 @@ class GaussianModel:
         self.denom = denom
         self.optimizer.load_state_dict(opt_dict)
 
-    # セクション5: 実行時状態アクセスとセマンティック補助
+    # セクション5: 実行時状態アクセスと補助関数
     def reset_opacity(self):
         """不透明度を低めにリセットし、densification/pruning の再評価を促す。
 
