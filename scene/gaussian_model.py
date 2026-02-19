@@ -81,14 +81,10 @@ class GaussianModel:
         self._scaling = torch.empty(0)
         self._rotation = torch.empty(0)
         self._opacity = torch.empty(0)
-        self._sem_whole = torch.empty(0)
-        self._sem_part = torch.empty(0)
-        self._sem_subpart = torch.empty(0)
         self.max_radii2D = torch.empty(0)
         self.xyz_gradient_accum = torch.empty(0)
         self.denom = torch.empty(0)
         self.optimizer = None
-        self.semantic_optimizer = None
         self.percent_dense = 0
         self.spatial_lr_scale = 0
         self.setup_functions()
@@ -199,7 +195,7 @@ class GaussianModel:
 
         具体的な操作:
           1) `tmp_radii = radii` を保持し、clone と split を順に実行する。
-          2) clone は選択点の属性（位置・特徴・不透明度・スケール・回転・semantic）を
+          2) clone は選択点の属性（位置・特徴・不透明度・スケール・回転）を
              そのまま複製して末尾に連結する。
           3) split は選択点を N 個に分割し、スケールを分配して回転付きの正規サンプルで
              新しい位置を生成、属性を複製して追加後、元点を削除する。
@@ -240,17 +236,11 @@ class GaussianModel:
         opacities = self._opacity.detach().cpu().numpy()
         scale = self._scaling.detach().cpu().numpy()
         rotation = self._rotation.detach().cpu().numpy()
-        sem_whole = self._sem_whole.detach().cpu().numpy() if self.has_semantic_features else None
-        sem_part = self._sem_part.detach().cpu().numpy() if self.has_semantic_features else None
-        sem_subpart = self._sem_subpart.detach().cpu().numpy() if self.has_semantic_features else None
 
         dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes()]
 
         elements = np.empty(xyz.shape[0], dtype=dtype_full)
-        base_attributes = [xyz, normals, f_dc, f_rest, opacities, scale, rotation]
-        if self.has_semantic_features:
-            base_attributes.extend([sem_whole, sem_part, sem_subpart])
-        attributes = np.concatenate(base_attributes, axis=1)
+        attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, scale, rotation), axis=1)
         elements[:] = list(map(tuple, attributes))
         el = PlyElement.describe(elements, 'vertex')
         PlyData([el]).write(path)
@@ -306,28 +296,6 @@ class GaussianModel:
         self._scaling = nn.Parameter(torch.tensor(scales, dtype=torch.float, device="cuda").requires_grad_(True))
         self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True))
 
-        def load_optional_sem(prefix):
-            names = [p.name for p in plydata.elements[0].properties if p.name.startswith(prefix)]
-            if not names:
-                return None
-            names = sorted(names, key=lambda x: int(x.split('_')[-1]))
-            vals = np.zeros((xyz.shape[0], len(names)))
-            for idx, attr_name in enumerate(names):
-                vals[:, idx] = np.asarray(plydata.elements[0][attr_name])
-            return nn.Parameter(torch.tensor(vals, dtype=torch.float, device="cuda").requires_grad_(True))
-
-        sem_whole = load_optional_sem("sem_whole_")
-        sem_part = load_optional_sem("sem_part_")
-        sem_subpart = load_optional_sem("sem_subpart_")
-        if sem_whole is not None and sem_part is not None and sem_subpart is not None:
-            self._sem_whole = sem_whole
-            self._sem_part = sem_part
-            self._sem_subpart = sem_subpart
-        else:
-            self._sem_whole = torch.empty(0, device="cuda")
-            self._sem_part = torch.empty(0, device="cuda")
-            self._sem_subpart = torch.empty(0, device="cuda")
-
         self.active_sh_degree = self.max_sh_degree
 
     def capture(self):
@@ -339,9 +307,6 @@ class GaussianModel:
             self._scaling,
             self._rotation,
             self._opacity,
-            self._sem_whole,
-            self._sem_part,
-            self._sem_subpart,
             self.max_radii2D,
             self.xyz_gradient_accum,
             self.denom,
@@ -360,7 +325,7 @@ class GaussianModel:
 
         なぜこの復元で十分か:
           - ガウシアン内部表現:
-            位置・SH特徴・スケール・回転・不透明度・(あれば)semantic特徴を
+            位置・SH特徴・スケール・回転・不透明度を
             直接 Parameter として復元するため、レンダリング状態は再現できる。
           - 構造適応の内部状態:
             `max_radii2D`, `xyz_gradient_accum`, `denom` を復元するため、
@@ -370,43 +335,19 @@ class GaussianModel:
             その後 `optimizer.load_state_dict(opt_dict)` で Adam のモーメント等を復元するため、
             最適化の連続性を保てる。`spatial_lr_scale` も復元済み値を使う。
 
-        互換性:
-          - 旧チェックポイント（semantic特徴なし）を受け入れるため、
-            `len(model_args) == 12` の分岐を持つ。
         """
-        # Backward compatible with old checkpoints that do not include semantic features.
-        if len(model_args) == 12:
-            (self.active_sh_degree, 
-            self._xyz, 
-            self._features_dc, 
-            self._features_rest,
-            self._scaling, 
-            self._rotation, 
-            self._opacity,
-            self.max_radii2D, 
-            xyz_gradient_accum, 
-            denom,
-            opt_dict, 
-            self.spatial_lr_scale) = model_args
-            self._sem_whole = torch.empty(0, device="cuda")
-            self._sem_part = torch.empty(0, device="cuda")
-            self._sem_subpart = torch.empty(0, device="cuda")
-        else:
-            (self.active_sh_degree, 
-            self._xyz, 
-            self._features_dc, 
-            self._features_rest,
-            self._scaling, 
-            self._rotation, 
-            self._opacity,
-            self._sem_whole,
-            self._sem_part,
-            self._sem_subpart,
-            self.max_radii2D, 
-            xyz_gradient_accum, 
-            denom,
-            opt_dict, 
-            self.spatial_lr_scale) = model_args
+        (self.active_sh_degree, 
+        self._xyz, 
+        self._features_dc, 
+        self._features_rest,
+        self._scaling, 
+        self._rotation, 
+        self._opacity,
+        self.max_radii2D, 
+        xyz_gradient_accum, 
+        denom,
+        opt_dict, 
+        self.spatial_lr_scale) = model_args
         self.training_setup(training_args)
         self.xyz_gradient_accum = xyz_gradient_accum
         self.denom = denom
@@ -471,38 +412,6 @@ class GaussianModel:
     def get_exposure(self):
         return self._exposure
 
-    @property
-    def has_semantic_features(self):
-        return self._sem_whole.numel() > 0 and self._sem_part.numel() > 0 and self._sem_subpart.numel() > 0
-
-    def get_semantic_features(self, level):
-        if level == "whole":
-            return self._sem_whole
-        if level == "part":
-            return self._sem_part
-        if level == "subpart":
-            return self._sem_subpart
-        raise ValueError(f"Unknown semantic level: {level}")
-
-    def initialize_semantic_features(self, latent_dim=3, init_std=1e-4):
-        n_points = self.get_xyz.shape[0]
-        zeros = torch.zeros((n_points, latent_dim), device="cuda", dtype=torch.float)
-        if init_std > 0:
-            zeros = zeros + torch.randn_like(zeros) * init_std
-        self._sem_whole = nn.Parameter(zeros.clone().requires_grad_(True))
-        self._sem_part = nn.Parameter(zeros.clone().requires_grad_(True))
-        self._sem_subpart = nn.Parameter(zeros.clone().requires_grad_(True))
-
-    def semantic_training_setup(self, semantic_lr):
-        if not self.has_semantic_features:
-            self.initialize_semantic_features()
-        groups = [
-            {"params": [self._sem_whole], "lr": semantic_lr, "name": "sem_whole"},
-            {"params": [self._sem_part], "lr": semantic_lr, "name": "sem_part"},
-            {"params": [self._sem_subpart], "lr": semantic_lr, "name": "sem_subpart"},
-        ]
-        self.semantic_optimizer = torch.optim.Adam(groups, lr=0.0, eps=1e-15)
-
     def get_exposure_from_name(self, image_name):
         """画像名に対応する露出補正行列（3x4アフィン変換）を返す。
 
@@ -546,13 +455,6 @@ class GaussianModel:
             l.append('scale_{}'.format(i))
         for i in range(self._rotation.shape[1]):
             l.append('rot_{}'.format(i))
-        if self.has_semantic_features:
-            for i in range(self._sem_whole.shape[1]):
-                l.append('sem_whole_{}'.format(i))
-            for i in range(self._sem_part.shape[1]):
-                l.append('sem_part_{}'.format(i))
-            for i in range(self._sem_subpart.shape[1]):
-                l.append('sem_subpart_{}'.format(i))
         return l
 
     # セクション7: densificationの内部プリミティブ
@@ -566,7 +468,7 @@ class GaussianModel:
           2) 形状条件で絞り込み:
              `max_scaling <= percent_dense * scene_extent`
              を満たす「比較的小さい」点だけ残す。
-          3) `selected_pts_mask` で各内部表現（xyz/features/opacity/scale/rotation/semantic）
+          3) `selected_pts_mask` で各内部表現（xyz/features/opacity/scale/rotation）
              を抽出し、そのまま新規点として追加する。
           4) `densification_postfix` を通して optimizer 状態と内部バッファを更新する。
 
@@ -590,9 +492,6 @@ class GaussianModel:
         new_rotation = self._rotation[selected_pts_mask]
 
         new_tmp_radii = self.tmp_radii[selected_pts_mask]
-        new_sem_whole = self._sem_whole[selected_pts_mask] if self.has_semantic_features else None
-        new_sem_part = self._sem_part[selected_pts_mask] if self.has_semantic_features else None
-        new_sem_subpart = self._sem_subpart[selected_pts_mask] if self.has_semantic_features else None
 
         self.densification_postfix(
             new_xyz,
@@ -602,9 +501,6 @@ class GaussianModel:
             new_scaling,
             new_rotation,
             new_tmp_radii,
-            new_sem_whole,
-            new_sem_part,
-            new_sem_subpart,
         )
 
     def densify_and_split(self, grads, grad_threshold, scene_extent, N=2):
@@ -621,7 +517,7 @@ class GaussianModel:
              - ローカル座標で `Normal(0, stds)` からオフセット `samples` を生成
              - 親の回転を適用し、親中心へ加算して `new_xyz` を得る
           4) 子属性の構築:
-             - 特徴・不透明度・回転・semantic は親を複製
+             - 特徴・不透明度・回転は親を複製
              - スケールは `get_scaling / (0.8 * N)` 相当に縮小し、子を小さくする
           5) 追加と置換:
              - `densification_postfix` で子を追加
@@ -650,9 +546,6 @@ class GaussianModel:
         new_features_rest = self._features_rest[selected_pts_mask].repeat(N,1,1)
         new_opacity = self._opacity[selected_pts_mask].repeat(N,1)
         new_tmp_radii = self.tmp_radii[selected_pts_mask].repeat(N)
-        new_sem_whole = self._sem_whole[selected_pts_mask].repeat(N, 1) if self.has_semantic_features else None
-        new_sem_part = self._sem_part[selected_pts_mask].repeat(N, 1) if self.has_semantic_features else None
-        new_sem_subpart = self._sem_subpart[selected_pts_mask].repeat(N, 1) if self.has_semantic_features else None
 
         self.densification_postfix(
             new_xyz,
@@ -662,9 +555,6 @@ class GaussianModel:
             new_scaling,
             new_rotation,
             new_tmp_radii,
-            new_sem_whole,
-            new_sem_part,
-            new_sem_subpart,
         )
 
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
@@ -679,9 +569,6 @@ class GaussianModel:
         new_scaling,
         new_rotation,
         new_tmp_radii,
-        new_sem_whole=None,
-        new_sem_part=None,
-        new_sem_subpart=None,
     ):
         d = {"xyz": new_xyz,
         "f_dc": new_features_dc,
@@ -697,12 +584,6 @@ class GaussianModel:
         self._opacity = optimizable_tensors["opacity"]
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
-        if self.has_semantic_features:
-            if new_sem_whole is None or new_sem_part is None or new_sem_subpart is None:
-                raise ValueError("Semantic features must be provided during densification when semantic mode is enabled.")
-            self._sem_whole = nn.Parameter(torch.cat((self._sem_whole, new_sem_whole), dim=0).detach().requires_grad_(self._sem_whole.requires_grad))
-            self._sem_part = nn.Parameter(torch.cat((self._sem_part, new_sem_part), dim=0).detach().requires_grad_(self._sem_part.requires_grad))
-            self._sem_subpart = nn.Parameter(torch.cat((self._sem_subpart, new_sem_subpart), dim=0).detach().requires_grad_(self._sem_subpart.requires_grad))
 
         self.tmp_radii = torch.cat((self.tmp_radii, new_tmp_radii))
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
@@ -720,10 +601,6 @@ class GaussianModel:
         self._opacity = optimizable_tensors["opacity"]
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
-        if self.has_semantic_features:
-            self._sem_whole = nn.Parameter(self._sem_whole[valid_points_mask].detach().requires_grad_(self._sem_whole.requires_grad))
-            self._sem_part = nn.Parameter(self._sem_part[valid_points_mask].detach().requires_grad_(self._sem_part.requires_grad))
-            self._sem_subpart = nn.Parameter(self._sem_subpart[valid_points_mask].detach().requires_grad_(self._sem_subpart.requires_grad))
 
         self.xyz_gradient_accum = self.xyz_gradient_accum[valid_points_mask]
 
