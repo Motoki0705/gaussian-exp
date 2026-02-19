@@ -51,6 +51,8 @@ class ModelParams(ParamGroup):
         self._model_path = ""
         self._images = "images"
         self._depths = ""
+        self.latent_maps = ""
+        self.latent_masks = ""
         self._resolution = -1
         self._white_background = False
         self.train_test_exp = False
@@ -95,6 +97,8 @@ class OptimizationParams(ParamGroup):
         self.densify_grad_threshold = 0.0002
         self.depth_l1_weight_init = 1.0
         self.depth_l1_weight_final = 0.01
+        self.latent_l1_weight_init = 0.0
+        self.latent_l1_weight_final = 0.0
         self.random_background = False
         self.optimizer_type = "default"
         super().__init__(parser, "Optimization Parameters")

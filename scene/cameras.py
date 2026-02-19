@@ -17,7 +17,7 @@ from utils.general_utils import PILtoTorch
 import cv2
 
 class Camera(nn.Module):
-    def __init__(self, resolution, colmap_id, R, T, FoVx, FoVy, depth_params, image, invdepthmap,
+    def __init__(self, resolution, colmap_id, R, T, FoVx, FoVy, depth_params, image, invdepthmap, latent_map, latent_valid_mask,
                  image_name, uid,
                  trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda",
                  train_test_exp = False, is_test_dataset = False, is_test_view = False
@@ -78,6 +78,19 @@ class Camera(nn.Module):
             valid_depth = (self.invdepthmap > 0).astype(np.float32)
             self.depth_mask = self.depth_mask * torch.from_numpy(valid_depth[None]).to(self.data_device)
             self.invdepthmap = torch.from_numpy(self.invdepthmap[None]).to(self.data_device)
+
+        self.latent_map = None
+        self.latent_valid_mask = None
+        self.latent_reliable = False
+        if latent_map is not None and latent_valid_mask is not None:
+            latent_map_resized = cv2.resize(latent_map, resolution, interpolation=cv2.INTER_LINEAR)
+            latent_mask_resized = cv2.resize(latent_valid_mask, resolution, interpolation=cv2.INTER_NEAREST)
+            if latent_mask_resized.ndim != 2:
+                latent_mask_resized = latent_mask_resized[..., 0]
+            latent_mask_resized = (latent_mask_resized > 127).astype(np.float32)
+            self.latent_map = torch.from_numpy(latent_map_resized).permute(2, 0, 1).to(self.data_device)
+            self.latent_valid_mask = torch.from_numpy(latent_mask_resized[None]).to(self.data_device)
+            self.latent_reliable = bool((latent_mask_resized > 0).sum() > 0)
 
         self.zfar = 100.0
         self.znear = 0.01

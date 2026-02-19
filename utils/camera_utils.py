@@ -10,6 +10,7 @@
 #
 
 from scene.cameras import Camera
+import os
 import numpy as np
 from utils.graphics_utils import fov2focal
 from PIL import Image
@@ -48,6 +49,24 @@ def loadCam(args, id, cam_info, resolution_scale, is_nerf_synthetic, is_test_dat
             raise
     else:
         invdepthmap = None
+
+    latent_map = None
+    latent_valid_mask = None
+    if cam_info.latent_map_path != "" and cam_info.latent_mask_path != "":
+        try:
+            if os.path.exists(cam_info.latent_map_path) and os.path.exists(cam_info.latent_mask_path):
+                latent_map = np.load(cam_info.latent_map_path).astype(np.float32)
+                latent_valid_mask = cv2.imread(cam_info.latent_mask_path, -1)
+                if latent_valid_mask is None:
+                    latent_valid_mask = None
+                else:
+                    if latent_valid_mask.ndim == 3:
+                        latent_valid_mask = latent_valid_mask[..., 0]
+                    latent_valid_mask = latent_valid_mask.astype(np.float32)
+        except Exception as e:
+            print(f"[Warning] Failed to read latent teacher for {cam_info.image_name}: {e}")
+            latent_map = None
+            latent_valid_mask = None
         
     orig_w, orig_h = image.size
     if args.resolution in [1, 2, 4, 8]:
@@ -73,6 +92,7 @@ def loadCam(args, id, cam_info, resolution_scale, is_nerf_synthetic, is_test_dat
     return Camera(resolution, colmap_id=cam_info.uid, R=cam_info.R, T=cam_info.T, 
                   FoVx=cam_info.FovX, FoVy=cam_info.FovY, depth_params=cam_info.depth_params,
                   image=image, invdepthmap=invdepthmap,
+                  latent_map=latent_map, latent_valid_mask=latent_valid_mask,
                   image_name=cam_info.image_name, uid=id, data_device=args.data_device,
                   train_test_exp=args.train_test_exp, is_test_dataset=is_test_dataset, is_test_view=cam_info.is_test)
 

@@ -84,11 +84,13 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
     use_sparse_adam = opt.optimizer_type == "sparse_adam" and SPARSE_ADAM_AVAILABLE 
     depth_l1_weight = get_expon_lr_func(opt.depth_l1_weight_init, opt.depth_l1_weight_final, max_steps=opt.iterations)
+    latent_l1_weight = get_expon_lr_func(opt.latent_l1_weight_init, opt.latent_l1_weight_final, max_steps=opt.iterations)
 
     viewpoint_stack = scene.getTrainCameras().copy()
     viewpoint_indices = list(range(len(viewpoint_stack)))
     ema_loss_for_log = 0.0
     ema_Ll1depth_for_log = 0.0
+    ema_Ll1latent_for_log = 0.0
     depth_teacher_flip = None
 
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
@@ -183,6 +185,22 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         else:
             Ll1depth = 0
 
+        # Latent supervision
+        Ll1latent = 0
+        if latent_l1_weight(iteration) > 0 and getattr(viewpoint_cam, "latent_reliable", False):
+            rendered_latent = render_pkg.get("latent", None)
+            teacher_latent = viewpoint_cam.latent_map.cuda() if viewpoint_cam.latent_map is not None else None
+            latent_mask = viewpoint_cam.latent_valid_mask.cuda() if viewpoint_cam.latent_valid_mask is not None else None
+            if rendered_latent is not None and teacher_latent is not None and latent_mask is not None:
+                if viewpoint_cam.alpha_mask is not None:
+                    latent_mask = latent_mask * viewpoint_cam.alpha_mask.cuda()
+                latent_diff = torch.abs(rendered_latent - teacher_latent) * latent_mask
+                valid_count = latent_mask.sum().clamp_min(1.0) * rendered_latent.shape[0]
+                Ll1latent_pure = latent_diff.sum() / valid_count
+                Ll1latent = latent_l1_weight(iteration) * Ll1latent_pure
+                loss += Ll1latent
+                Ll1latent = Ll1latent.item()
+
         loss.backward()
 
         iter_end.record()
@@ -191,9 +209,14 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             # Progress bar
             ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
             ema_Ll1depth_for_log = 0.4 * Ll1depth + 0.6 * ema_Ll1depth_for_log
+            ema_Ll1latent_for_log = 0.4 * Ll1latent + 0.6 * ema_Ll1latent_for_log
 
             if iteration % 10 == 0:
-                progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}", "Depth Loss": f"{ema_Ll1depth_for_log:.{7}f}"})
+                progress_bar.set_postfix({
+                    "Loss": f"{ema_loss_for_log:.{7}f}",
+                    "Depth Loss": f"{ema_Ll1depth_for_log:.{7}f}",
+                    "Latent Loss": f"{ema_Ll1latent_for_log:.{7}f}",
+                })
                 progress_bar.update(10)
             if iteration == opt.iterations:
                 progress_bar.close()
