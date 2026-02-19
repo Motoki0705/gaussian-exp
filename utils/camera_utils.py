@@ -22,10 +22,20 @@ def loadCam(args, id, cam_info, resolution_scale, is_nerf_synthetic, is_test_dat
 
     if cam_info.depth_path != "":
         try:
+            raw_depth = cv2.imread(cam_info.depth_path, -1)
+            if raw_depth is None:
+                raise IOError("cv2.imread returned None.")
+
             if is_nerf_synthetic:
-                invdepthmap = cv2.imread(cam_info.depth_path, -1).astype(np.float32) / 512
+                invdepthmap = raw_depth.astype(np.float32) / 512
             else:
-                invdepthmap = cv2.imread(cam_info.depth_path, -1).astype(np.float32) / float(2**16)
+                # Colmap-style depth is often uint16; externally generated relative depth can be uint8.
+                if raw_depth.dtype == np.uint16:
+                    invdepthmap = raw_depth.astype(np.float32) / float(2**16)
+                elif raw_depth.dtype == np.uint8:
+                    invdepthmap = raw_depth.astype(np.float32)
+                else:
+                    invdepthmap = raw_depth.astype(np.float32)
 
         except FileNotFoundError:
             print(f"Error: The depth file at path '{cam_info.depth_path}' was not found.")

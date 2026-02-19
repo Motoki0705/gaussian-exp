@@ -155,7 +155,7 @@ def readColmapSceneInfo(path, images, depths, eval, train_test_exp, llffhold=8):
         cam_intrinsics = read_intrinsics_text(cameras_intrinsic_file)
 
     depth_params_file = os.path.join(path, "sparse/0", "depth_params.json")
-    ## if depth_params_file isnt there AND depths file is here -> throw error
+    ## depth_params.json is optional for externally generated relative depth.
     depths_params = None
     if depths != "":
         try:
@@ -170,8 +170,7 @@ def readColmapSceneInfo(path, images, depths, eval, train_test_exp, llffhold=8):
                 depths_params[key]["med_scale"] = med_scale
 
         except FileNotFoundError:
-            print(f"Error: depth_params.json file not found at path '{depth_params_file}'.")
-            sys.exit(1)
+            print(f"[Warning] depth_params.json not found at '{depth_params_file}'. Continue with unscaled depth.")
         except Exception as e:
             print(f"An unexpected error occurred when trying to open depth_params.json file: {e}")
             sys.exit(1)

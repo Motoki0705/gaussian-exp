@@ -75,6 +75,8 @@ class Camera(nn.Module):
 
             if self.invdepthmap.ndim != 2:
                 self.invdepthmap = self.invdepthmap[..., 0]
+            valid_depth = (self.invdepthmap > 0).astype(np.float32)
+            self.depth_mask = self.depth_mask * torch.from_numpy(valid_depth[None]).to(self.data_device)
             self.invdepthmap = torch.from_numpy(self.invdepthmap[None]).to(self.data_device)
 
         self.zfar = 100.0
@@ -100,4 +102,3 @@ class MiniCam:
         self.full_proj_transform = full_proj_transform
         view_inv = torch.inverse(self.world_view_transform)
         self.camera_center = view_inv[3][:3]
-

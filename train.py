@@ -40,6 +40,28 @@ try:
 except:
     SPARSE_ADAM_AVAILABLE = False
 
+
+def _masked_correlation(x: torch.Tensor, y: torch.Tensor, mask: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+    valid = mask > 0.5
+    if valid.sum() < 16:
+        return torch.tensor(0.0, device=x.device, dtype=x.dtype)
+    xv = x[valid]
+    yv = y[valid]
+    xv = xv - xv.mean()
+    yv = yv - yv.mean()
+    denom = torch.sqrt((xv * xv).mean() * (yv * yv).mean()) + eps
+    return (xv * yv).mean() / denom
+
+
+def _masked_mad_normalize(x: torch.Tensor, mask: torch.Tensor, eps: float = 1e-6):
+    valid = mask > 0.5
+    if valid.sum() < 16:
+        return None
+    xv = x[valid]
+    med = xv.median()
+    mad = (xv - med).abs().mean()
+    return (x - med) / (mad + eps)
+
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
 
     if not SPARSE_ADAM_AVAILABLE and opt.optimizer_type == "sparse_adam":
@@ -67,6 +89,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     viewpoint_indices = list(range(len(viewpoint_stack)))
     ema_loss_for_log = 0.0
     ema_Ll1depth_for_log = 0.0
+    depth_teacher_flip = None
 
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
@@ -127,15 +150,36 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         # Depth regularization
         Ll1depth_pure = 0.0
-        if depth_l1_weight(iteration) > 0 and viewpoint_cam.depth_reliable:
+        if depth_l1_weight(iteration) > 0 and viewpoint_cam.depth_reliable and viewpoint_cam.invdepthmap is not None:
             invDepth = render_pkg["depth"]
             mono_invdepth = viewpoint_cam.invdepthmap.cuda()
             depth_mask = viewpoint_cam.depth_mask.cuda()
+            if viewpoint_cam.alpha_mask is not None:
+                depth_mask = depth_mask * viewpoint_cam.alpha_mask.cuda()
 
-            Ll1depth_pure = torch.abs((invDepth  - mono_invdepth) * depth_mask).mean()
-            Ll1depth = depth_l1_weight(iteration) * Ll1depth_pure 
-            loss += Ll1depth
-            Ll1depth = Ll1depth.item()
+            teacher_depth = mono_invdepth
+            if depth_teacher_flip is None:
+                corr_raw = _masked_correlation(invDepth, mono_invdepth, depth_mask)
+                corr_flip = _masked_correlation(invDepth, 255.0 - mono_invdepth, depth_mask)
+                depth_teacher_flip = bool((corr_flip > corr_raw).item())
+                print(
+                    f"[Depth] Orientation selected: {'flip (255-d)' if depth_teacher_flip else 'raw'} "
+                    f"(corr_raw={float(corr_raw.detach()):.4f}, corr_flip={float(corr_flip.detach()):.4f})"
+                )
+            if depth_teacher_flip:
+                teacher_depth = 255.0 - mono_invdepth
+
+            pred_norm = _masked_mad_normalize(invDepth, depth_mask)
+            teacher_norm = _masked_mad_normalize(teacher_depth, depth_mask)
+            if pred_norm is not None and teacher_norm is not None:
+                diff = torch.abs(pred_norm - teacher_norm) * depth_mask
+                valid_count = depth_mask.sum().clamp_min(1.0)
+                Ll1depth_pure = diff.sum() / valid_count
+                Ll1depth = depth_l1_weight(iteration) * Ll1depth_pure
+                loss += Ll1depth
+                Ll1depth = Ll1depth.item()
+            else:
+                Ll1depth = 0
         else:
             Ll1depth = 0
 
