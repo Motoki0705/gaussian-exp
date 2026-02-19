@@ -10,3 +10,11 @@ screenshots
 data/
 checkpoints/
 docs/papers
+
+# experiment artifacts
+exp/**/__pycache__/
+exp/*_demo/
+exp/*_tmp/
+
+# local vendored/temporary external code
+third_party/
