@@ -12,10 +12,12 @@
 import torch
 from scene import Scene
 import os
+import numpy as np
 from tqdm import tqdm
 from os import makedirs
 from gaussian_renderer import render
 import torchvision
+from PIL import Image
 from utils.general_utils import safe_state
 from argparse import ArgumentParser
 from arguments import ModelParams, PipelineParams, get_combined_args
@@ -27,23 +29,63 @@ except:
     SPARSE_ADAM_AVAILABLE = False
 
 
+def _to_uint8_gray(x: torch.Tensor) -> np.ndarray:
+    x_np = x.detach().float().cpu().numpy()
+    if x_np.ndim == 3:
+        x_np = x_np[0]
+    x_min = float(x_np.min())
+    x_max = float(x_np.max())
+    den = max(x_max - x_min, 1e-6)
+    x_norm = (x_np - x_min) / den
+    return np.clip(x_norm * 255.0, 0, 255).astype(np.uint8)
+
+
+def _to_uint8_rgb(x: torch.Tensor) -> np.ndarray:
+    x_np = x.detach().float().cpu().numpy()
+    if x_np.ndim != 3:
+        raise ValueError(f"Expected CHW tensor for RGB visualization, got shape={x_np.shape}")
+    c, h, w = x_np.shape
+    if c != 3:
+        raise ValueError(f"Expected 3 channels for RGB visualization, got C={c}")
+    x_flat = x_np.reshape(3, -1)
+    x_min = x_flat.min(axis=1, keepdims=True)
+    x_max = x_flat.max(axis=1, keepdims=True)
+    den = np.maximum(x_max - x_min, 1e-6)
+    x_norm = (x_flat - x_min) / den
+    x_rgb = (x_norm.reshape(3, h, w).transpose(1, 2, 0) * 255.0).clip(0, 255).astype(np.uint8)
+    return x_rgb
+
+
 def render_set(model_path, name, iteration, views, gaussians, pipeline, background, train_test_exp, separate_sh):
     render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
     gts_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt")
+    depth_vis_path = os.path.join(model_path, name, "ours_{}".format(iteration), "depth_vis")
+    latent_vis_path = os.path.join(model_path, name, "ours_{}".format(iteration), "latent_vis")
 
     makedirs(render_path, exist_ok=True)
     makedirs(gts_path, exist_ok=True)
+    makedirs(depth_vis_path, exist_ok=True)
+    makedirs(latent_vis_path, exist_ok=True)
 
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
-        rendering = render(view, gaussians, pipeline, background, use_trained_exp=train_test_exp, separate_sh=separate_sh)["render"]
+        render_pkg = render(view, gaussians, pipeline, background, use_trained_exp=train_test_exp, separate_sh=separate_sh)
+        rendering = render_pkg["render"]
+        depth = render_pkg["depth"]
+        latent = render_pkg.get("latent", None)
         gt = view.original_image[0:3, :, :]
 
         if args.train_test_exp:
             rendering = rendering[..., rendering.shape[-1] // 2:]
             gt = gt[..., gt.shape[-1] // 2:]
+            depth = depth[..., depth.shape[-1] // 2:]
+            if latent is not None:
+                latent = latent[..., latent.shape[-1] // 2:]
 
         torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
         torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
+        Image.fromarray(_to_uint8_gray(depth), mode="L").save(os.path.join(depth_vis_path, '{0:05d}'.format(idx) + ".png"))
+        if latent is not None:
+            Image.fromarray(_to_uint8_rgb(latent), mode="RGB").save(os.path.join(latent_vis_path, '{0:05d}'.format(idx) + ".png"))
 
 def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool, separate_sh: bool):
     with torch.no_grad():
